@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jungle Strike — Pixel Assault</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#101714; color:#f5f0d7; font-family:Consolas, "Courier New", monospace; display:flex; min-height:100vh; align-items:center; justify-content:center; }
+  .wrap { width:min(1100px, 100vw); padding:14px; }
+  .top { display:flex; justify-content:space-between; gap:12px; align-items:center; margin:0 0 10px; flex-wrap:wrap; }
+  .logo { font-weight:900; letter-spacing:2px; color:#f5c842; text-shadow:3px 3px #8a321c; font-size:clamp(18px,3vw,28px); }
+  .tag { color:#a6c2a0; font-size:12px; }
+  .screen { position:relative; border:4px solid #64745b; box-shadow:0 0 0 4px #1b241d, 0 14px 45px #000a; background:#253b31; overflow:hidden; }
+  canvas { display:block; width:100%; height:auto; image-rendering:pixelated; image-rendering:crisp-edges; }
+  .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:#07100bc9; text-align:center; padding:20px; }
+  .panel { max-width:600px; border:3px solid #d7c47a; background:#17231eeF; padding:24px; box-shadow:7px 7px #070b08; }
+  .panel h1 { color:#f4ca42; margin:0 0 8px; font-size:clamp(25px,5vw,42px); text-shadow:3px 3px #7a2c1b; }
+  .panel p { line-height:1.55; color:#d8e0c8; font-size:14px; }
+  button { background:#e4b933; border:0; border-bottom:4px solid #8d4a22; color:#182019; font:900 16px Consolas,monospace; padding:12px 22px; cursor:pointer; }
+  button:hover { filter:brightness(1.12); transform:translateY(-1px); }
+  .bottom { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; color:#b8c7ad; font-size:12px; margin-top:12px; }
+  .mobile { display:none; gap:8px; justify-content:space-between; margin-top:12px; }
+  .mobile button { min-width:54px; padding:12px; flex:1; }
+  @media (max-width:700px) { .mobile{display:flex} .tag{display:none} .wrap{padding:8px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><div class="logo">JUNGLE STRIKE <span style="color:#f2eee0">/</span> PIXEL ASSAULT</div><div class="tag">ARCADE ACTION • CAMPAÑA DE 6 NIVELES</div></div>
+  <div class="screen">
+    <canvas id="game" width="960" height="540" aria-label="Juego de acción pixel art"></canvas>
+    <div class="overlay" id="overlay">
+      <div class="panel">
+        <h1>JUNGLE STRIKE</h1>
+        <p>¡Supera 6 niveles diferentes! Jungla, base militar, ciudad en ruinas, desierto, complejo subterráneo y fortaleza final. Cada escenario cambia de ambiente y aumenta el desafío.</p>
+        <p><b>CONTROLES</b><br>← → o A / D: mover · W / ↑ / ESPACIO: saltar<br>J o Z: disparar · K o X: granada · P: pausa</p>
+        <button id="start">INICIAR MISIÓN</button>
+      </div>
+    </div>
+  </div>
+  <div class="mobile">
+    <button data-key="left">◀</button><button data-key="jump">▲ SALTAR</button><button data-key="fire">● FUEGO</button><button data-key="right">▶</button><button data-key="grenade">✦</button>
+  </div>
+  <div class="bottom"><span>WASD / FLECHAS · J DISPARAR · K GRANADA · P PAUSA</span><span id="status">LISTO PARA DESPLEGAR</span><span>FPS ARCADE · PIXEL ART</span></div>
+</div>
+<script>
+(() => {
+const canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const W=canvas.width,H=canvas.height, ground=445;
+const keys = {};
+let running=false, paused=false, gameOver=false, won=false;
+let camera=0, score=0, lives=3, ammo=99, grenades=5, frame=0, shake=0;
+let worldWidth=5200;
+let level=1;
+const maxLevels=6;
+const levelNames=['JUNGLA PANTANOSA','BASE MILITAR','CIUDAD EN RUINAS','DESIERTO ROJO','COMPLEJO SUBTERRÁNEO','FORTALEZA FINAL'];
+const palettes=[['#66745a','#8b9270','#475e43','#536c3c','#263d2b'],['#4c6270','#78858b','#394c56','#5a6250','#28383b'],['#66645e','#969087','#4a4844','#68665b','#302f2b'],['#b9824d','#d3a36b','#75583e','#a07843','#493727'],['#303c4c','#5c6875','#202b37','#45534a','#1d2729'],['#5d4548','#98716b','#392e35','#62523c','#25252a']];
+const player={x:100,y:ground-48,w:30,h:48,vx:0,vy:0,face:1,onGround:true,invuln:0,shoot:0,walk:0};
+let bullets=[], enemyBullets=[], enemies=[], particles=[], grenadesLive=[], pickups=[], explosions=[];
+const rand=(a,b)=>a+Math.random()*(b-a);
+function rect(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h));}
+function line(x1,y1,x2,y2,c,w=1){ctx.strokeStyle=c;ctx.lineWidth=w;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
+function text(t,x,y,size=16,color='#fff',align='left'){ctx.font=`bold ${size}px Consolas, monospace`;ctx.textAlign=align;ctx.lineWidth=3;ctx.strokeStyle='#10140f';ctx.strokeText(t,x,y);ctx.fillStyle=color;ctx.fillText(t,x,y);}
+function cloud(x,y,s){rect(x,y,48*s,7*s,'#687967');rect(x+10*s,y-7*s,31*s,7*s,'#75836c');rect(x+23*s,y+7*s,38*s,5*s,'#526b5b');}
+function drawBackground(){
+  const pal=palettes[level-1];
+  const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,pal[0]);g.addColorStop(.55,pal[1]);g.addColorStop(1,pal[2]);ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  // distant jungle silhouettes
+  for(let i=0;i<15;i++){let x=((i*103-camera*.15)%(W+180)+W+180)%(W+180)-80;let h=180+(i*47%150);
+    if(level===1){rect(x,130,12,h,'#596d4e');rect(x-17,175,46,15,'#657852');rect(x-24,208,60,18,'#5b714b');rect(x-10,245,40,14,'#50684a');}
+    else if(level===2){rect(x,130,25,h,'#45525a');rect(x-18,175,60,18,'#68736d');rect(x-7,205,45,14,'#394b50');}
+    else if(level===3){rect(x,130,38,h,'#5d5a53');rect(x-25,175,80,20,'#777269');rect(x-10,208,55,14,'#4e4b46');}
+    else if(level===4){rect(x,190,10,h-30,'#8e633b');rect(x-25,225,65,12,'#bd8c50');rect(x-12,250,40,10,'#9a6d40');}
+    else {rect(x,130,22,h,'#35404a');rect(x-18,175,60,18,'#4a5660');rect(x-10,210,42,15,'#303941');}
+  }
+  for(let i=0;i<8;i++){let x=((i*177-camera*.3)%(W+200)+W+200)%(W+200)-100;cloud(x,85+(i*31%110),1.1);}
+  // vines
+  if(level===1){for(let i=0;i<7;i++){let x=((i*171-camera*.4)%(W+80)+W+80)%(W+80)-40;line(x,0,x+rand(-12,12),rand(70,180),'#334f38',4);rect(x-9,rand(80,170),18,5,'#41613a');}}
+  // swamp
+  rect(0,ground+6,W,H-ground,pal[3]);rect(0,ground+16,W,10,level===4?'#d6b77c':'#8d9a78');rect(0,ground+27,W,5,'#34482e');rect(0,ground+38,W,H-ground-38,pal[4]);
+  for(let i=0;i<70;i++){let x=((i*53-camera*.8)%(W+30)+W+30)%(W+30)-10;let y=ground+rand(3,78);rect(x,y,rand(5,20),2,i%3?'#71804b':'#9ca17a');}
+  // foreground reeds
+  for(let i=0;i<36;i++){let x=((i*39-camera)%(W+50)+W+50)%(W+50)-20;line(x,ground+20,x+rand(-10,10),ground-rand(5,45),'#314b2b',3);}
+}
+function drawPlatform(worldX,y,w){let x=worldX-camera; if(x<-w||x>W)return;rect(x,y,w,12,'#6b492d');rect(x,y,w,4,'#b28a4c');for(let i=0;i<w;i+=18){rect(x+i,y+4,3,8,'#4a3325');rect(x+i+7,y+1,3,2,'#d2a762');}rect(x,y+12,w,4,'#433b28');}
+function drawBridge(x,y,w){let sx=x-camera;if(sx<-w||sx>W)return;line(sx,y+10,sx+w,y+10,'#62472b',7);line(sx,y+2,sx+w,y+2,'#c49a57',5);for(let i=0;i<w;i+=19){rect(sx+i,y-1,16,11,i%2?'#a47a43':'#c49a57');rect(sx+i+3,y+2,2,2,'#e3c27b');}for(let i=0;i<=w;i+=45){line(sx+i,y+5,sx+i+8,y+65,'#6a4a2c',5);}}
+function drawCrate(x,y){let sx=x-camera;rect(sx,y,32,32,'#75502c');rect(sx+3,y+3,26,26,'#a77a3d');line(sx+4,y+4,sx+27,y+27,'#5e4227',4);line(sx+27,y+4,sx+4,y+27,'#5e4227',4);rect(sx+12,y+12,8,8,'#d2a354');}
+function drawTank(x,y,scale=1){let sx=x-camera;ctx.save();ctx.translate(sx,y);ctx.scale(scale,scale);rect(0,20,76,24,'#59634d');rect(7,14,55,14,'#7e8765');rect(18,5,34,14,'#78836a');rect(38,0,42,6,'#343e31');rect(43,-3,35,4,'#a7aa8a');rect(5,39,68,8,'#252c23');for(let i=0;i<5;i++){rect(10+i*12,41,6,4,'#8a9273');}rect(24,2,9,4,'#d6cfa1');ctx.restore();}
+function drawSoldier(e){
+ let x=e.x-camera,y=e.y;if(x<-60||x>W+60)return;
+ // shadow
+ rect(x-3,y+e.h-2,32,4,'#273326');
+ // boots and legs
+ rect(x+5,y+31,8,13,'#3c4c32');rect(x+17,y+31,8,13,'#46583a');rect(x+2,y+41,12,5,'#252d24');rect(x+16,y+41,13,5,'#252d24');
+ // body / vest
+ rect(x+4,y+13,22,21,'#5f7942');rect(x+7,y+15,16,15,'#82944b');rect(x+8,y+19,5,5,'#39492f');rect(x+18,y+19,5,6,'#39492f');
+ // head helmet
+ rect(x+8,y+3,15,12,'#d0a16d');rect(x+5,y+1,20,6,'#667d3e');rect(x+9,y-2,12,5,'#87964b');rect(x+18,y+7,3,3,'#1b2018');
+ // arms and gun
+ rect(x+1,y+17,8,7,'#d0a16d');rect(x+21,y+16,9,6,'#c99865');rect(x+24,y+17,19,4,'#353c34');rect(x+39,y+18,7,2,'#aab09a');
+ if(e.flash>0){rect(x+44,y+16,9,5,'#f9d86a');rect(x+52,y+17,5,3,'#fff4bc');}
+}
+function drawPlayer(){
+ const p=player,x=p.x-camera,y=p.y; if(p.invuln>0&&Math.floor(frame/4)%2===0)return;
+ rect(x-4,y+p.h-2,38,5,'#263326');
+ // animated legs
+ let step=p.onGround&&Math.abs(p.vx)>.2?Math.sin(p.walk)*4:0;
+ rect(x+6,y+31,8,12+step,'#4b6339');rect(x+18,y+31,8,12-step,'#4b6339');rect(x+2,y+42+step,13,5,'#252b25');rect(x+17,y+42-step,13,5,'#252b25');
+ rect(x+5,y+14,22,20,'#4e7142');rect(x+8,y+16,16,14,'#7c914c');rect(x+9,y+21,5,5,'#394c34');rect(x+19,y+20,4,6,'#394c34');
+ rect(x+8,y+3,15,12,'#d6a879');rect(x+5,y+1,20,6,'#c19b38');rect(x+9,y-2,12,5,'#e1c84b');rect(x+18,y+7,3,3,'#28251c');
+ let gunX=p.face===1?x+24:x-16;rect(gunX,y+18,22,5,'#343a35');rect(gunX+3,y+16,12,3,'#8c9a83');rect(gunX+(p.face===1?17:0),y+19,5,2,'#d2d8c1');
+ if(p.shoot>0){let fx=p.face===1?x+46:x-23;rect(fx,y+15,9,7,'#fff0a0');rect(fx+(p.face===1?5:-3),y+17,7,3,'#ff8b35');}
+}
+function spawnEnemy(x){enemies.push({x,y:ground-45,w:30,h:45,hp:2,dir:-1,shoot:rand(40,120),flash:0,speed:rand(.35,.7)});}
+function burst(x,y,color,n=12){for(let i=0;i<n;i++)particles.push({x,y,vx:rand(-3,3),vy:rand(-4,1),life:rand(12,30),max:30,color,size:rand(2,5)});}
+function boom(x,y,big=false){explosions.push({x,y,life:big?30:20,max:big?30:20,big});burst(x,y,'#ffb83e',big?30:18);burst(x,y,'#e84c26',big?24:12);shake=big?12:5;}
+function buildLevel(){
+ camera=0;player.x=100;player.y=ground-48;player.vx=player.vy=0;player.invuln=50;
+ bullets=[];enemyBullets=[];enemies=[];particles=[];grenadesLive=[];pickups=[];explosions=[];
+ worldWidth=5200;
+ for(let x=500;x<worldWidth-300;x+=rand(320,510))spawnEnemy(x);
+ for(let x=760;x<worldWidth-250;x+=930)pickups.push({x,y:ground-28,type:Math.random()<.5?'ammo':'grenade'});
+}
+function resetGame(){level=1;camera=0;score=0;lives=3;ammo=99;grenades=5;frame=0;buildLevel();running=true;paused=false;gameOver=false;won=false;document.getElementById('overlay').style.display='none';}
+function nextLevel(){
+ if(level>=maxLevels){won=true;score+=1000;showEnd('¡CAMPAÑA COMPLETADA!','Has conquistado los seis escenarios. ¡Eres una leyenda arcade!');return;}
+ level++;score+=500;buildLevel();
+}
+function fire(){if(player.shoot>0||ammo<=0)return;player.shoot=7;ammo--;bullets.push({x:player.x+(player.face===1?44:-13),y:player.y+22,vx:player.face*10,life:70});}
+function toss(){if(grenades<=0)return;grenades--;grenadesLive.push({x:player.x+15,y:player.y+17,vx:player.face*4,vy:-6,fuse:70});}
+function update(){
+ if(!running||paused||gameOver||won)return;frame++;
+ player.vx=0;if(keys.ArrowLeft||keys.a||keys.left){player.vx=-3;player.face=-1;}if(keys.ArrowRight||keys.d||keys.right){player.vx=3;player.face=1;}
+ player.x=Math.max(0,Math.min(worldWidth-player.w,player.x+player.vx));player.walk+=Math.abs(player.vx)*.14;
+ if((keys.ArrowUp||keys.w||keys[' ']||keys.jump)&&player.onGround){player.vy=-10.8;player.onGround=false;}
+ player.vy+=.48;player.y+=player.vy;if(player.y+player.h>=ground){player.y=ground-player.h;player.vy=0;player.onGround=true;}
+ if((keys.j||keys.z||keys.fire)&&frame%7===0)fire();if(player.shoot>0)player.shoot--;if(player.invuln>0)player.invuln--;
+ if(keys.k||keys.x||keys.grenade){if(!keys._grenadeHeld){toss();keys._grenadeHeld=true;}}else keys._grenadeHeld=false;
+ camera=Math.max(0,Math.min(worldWidth-W,player.x-W*.35));
+ bullets.forEach(b=>{b.x+=b.vx;b.life--;});
+ for(let b of bullets){for(let e of enemies){if(e.hp>0&&Math.abs(b.x-e.x-15)<20&&Math.abs(b.y-e.y-22)<22){e.hp--;e.flash=5;b.life=0;burst(b.x,b.y,'#ffe17a',4);if(e.hp<=0){score+=150;boom(e.x+15,e.y+22);if(Math.random()<.2)pickups.push({x:e.x,y:ground-26,type:'ammo'});}}}}
+ bullets=bullets.filter(b=>b.life>0&&b.x>camera-20&&b.x<camera+W+20);
+ enemies.forEach(e=>{if(e.hp<=0)return;e.shoot--;e.flash=Math.max(0,e.flash-1);if(Math.abs(player.x-e.x)<400){e.x+=Math.sign(player.x-e.x)*e.speed*.25;if(e.shoot<=0){enemyBullets.push({x:e.x+15,y:e.y+22,vx:player.x<e.x?-4:4,life:100});e.shoot=rand(90,150);e.flash=4;}}});
+ enemyBullets.forEach(b=>{b.x+=b.vx;b.life--;if(Math.abs(b.x-player.x-15)<18&&Math.abs(b.y-player.y-22)<25&&player.invuln<=0){lives--;player.invuln=100;boom(player.x+15,player.y+20);if(lives<=0){gameOver=true;showEnd('MISIÓN FALLIDA','Tu escuadrón necesita otro intento.');}}});
+ enemyBullets=enemyBullets.filter(b=>b.life>0&&b.x>camera-40&&b.x<camera+W+40);
+ grenadesLive.forEach(g=>{g.x+=g.vx;g.vy+=.25;g.y+=g.vy;if(g.y>ground-8){g.y=ground-8;g.vy*=-.45;g.vx*=.85;}g.fuse--;if(g.fuse<=0){boom(g.x,g.y,true);enemies.forEach(e=>{if(Math.abs(e.x-g.x)<130)e.hp=0;});score+=300;}});
+ grenadesLive=grenadesLive.filter(g=>g.fuse>0);
+ pickups=pickups.filter(p=>{if(Math.abs(p.x-player.x)<28&&Math.abs(p.y-player.y)<40){if(p.type==='ammo')ammo=Math.min(99,ammo+25);else grenades=Math.min(9,grenades+2);score+=50;return false;}return true;});
+ particles.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.12;p.life--;});particles=particles.filter(p=>p.life>0);
+ explosions.forEach(e=>e.life--);explosions=explosions.filter(e=>e.life>0);
+ if(frame%500===0&&enemies.filter(e=>e.hp>0).length<10&&player.x<worldWidth-600)spawnEnemy(Math.min(worldWidth-150,player.x+700));
+ if(player.x>worldWidth-220){nextLevel();}
+}
+function draw(){
+ ctx.save();if(shake>0){ctx.translate(rand(-shake,shake),rand(-shake,shake));shake*=.82;if(shake<.5)shake=0;}
+ drawBackground();
+ // camp platforms and bridges
+ drawBridge(250,300,240);drawBridge(1160,270,300);drawBridge(2150,305,250);drawBridge(3400,265,330);
+ for(let i=0;i<7;i++){let x=330+i*760-camera;if(x>-100&&x<W+100){rect(x,ground-110,8,110,'#59462d');rect(x-12,ground-115,32,8,'#b18b4b');rect(x-6,ground-145,22,32,'#7e5931');rect(x-1,ground-139,12,15,'#e7bf55');}}
+ drawPlatform(620,ground-70,100);drawPlatform(1480,ground-95,140);drawPlatform(2580,ground-75,110);drawPlatform(3900,ground-90,130);
+ for(let x=700;x<worldWidth;x+=880){drawCrate(x,ground-32);if(x%2===0)drawCrate(x+42,ground-32);}
+ for(let x=1000;x<worldWidth;x+=1200)drawTank(x,ground-49,.9);
+ // far mission marker
+ let exitX=worldWidth-camera-90;if(exitX>-20&&exitX<W+20){rect(exitX,ground-140,5,140,'#d9c67c');rect(exitX+5,ground-138,55,25,'#b7432c');text('EXIT',exitX+31,ground-121,12,'#fff1bf','center');}
+ pickups.forEach(p=>{let x=p.x-camera;rect(x,p.y,22,22,p.type==='ammo'?'#d4bd4a':'#56a8d2');rect(x+4,p.y+4,14,14,'#26372d');text(p.type==='ammo'?'A':'+',x+11,p.y+16,13,'#fff4c8','center');});
+ enemies.forEach(e=>{if(e.hp>0)drawSoldier(e);});
+ drawPlayer();
+ bullets.forEach(b=>{rect(b.x-camera,b.y,15,4,'#a7f2ff');rect(b.x-camera+8,b.y-1,7,6,'#fff6b0');});
+ enemyBullets.forEach(b=>{rect(b.x-camera,b.y,10,4,'#ff9b42');rect(b.x-camera+7,b.y-1,5,6,'#ffdf70');});
+ grenadesLive.forEach(g=>{rect(g.x-camera,g.y,10,8,'#34452f');rect(g.x-camera+2,g.y-2,5,3,'#d5bd64');});
+ particles.forEach(p=>{ctx.globalAlpha=Math.max(0,p.life/p.max);rect(p.x-camera,p.y,p.size,p.size,p.color);});ctx.globalAlpha=1;
+ explosions.forEach(e=>{let r=(1-e.life/e.max)*(e.big?48:29)+5;ctx.globalAlpha=e.life/e.max;ctx.fillStyle='#ffb52d';ctx.beginPath();ctx.arc(e.x-camera,e.y,r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#e94a20';ctx.beginPath();ctx.arc(e.x-camera,e.y,r*.65,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff0a1';ctx.beginPath();ctx.arc(e.x-camera,e.y,r*.3,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;});
+ ctx.restore();
+ // HUD
+ rect(0,0,W,64,'#101610d9');rect(12,10,220,42,'#394235');rect(16,14,212,34,'#111a13');text('SCORE',26,29,12,'#c7d2ac');text(String(score).padStart(7,'0'),26,47,20,'#f3d451');
+ text('LIFE',260,24,12,'#d8dfc6');for(let i=0;i<3;i++){rect(260+i*24,31,18,16,i<lives?'#cf4c35':'#453d32');rect(264+i*24,27,10,7,i<lives?'#e8a56b':'#65584a');}
+ text('ARMS  RIFLE',380,25,13,'#d8dfc6');text('AMMO '+String(ammo).padStart(2,'0'),380,47,17,'#f4cf45');text('GRENADES '+grenades,520,40,15,'#aee7e4');
+ rect(730,17,210,14,'#3b4534');rect(733,20,Math.max(0,204*(player.x/worldWidth)),8,'#b7c96a');text('MISSION '+String(level).padStart(2,'0'),835,48,13,'#f2eee0','center');
+ text(levelNames[level-1],835,59,9,'#c9d5b9','center');
+ // scanline-ish subtle pixel texture
+ for(let y=70;y<H;y+=4){ctx.fillStyle='rgba(8,14,8,.045)';ctx.fillRect(0,y,W,1);}
+ if(paused){ctx.fillStyle='#07100bc9';ctx.fillRect(0,0,W,H);text('PAUSA',W/2,H/2,42,'#f4ca42','center');text('Pulsa P para continuar',W/2,H/2+32,17,'#fff','center');}
+}
+function showEnd(title,desc){running=false;const ov=document.getElementById('overlay');ov.style.display='flex';ov.innerHTML=`<div class="panel"><h1>${title}</h1><p>${desc}</p><p><b>PUNTUACIÓN: ${score}</b></p><button id="again">VOLVER A JUGAR</button></div>`;document.getElementById('again').onclick=resetGame;}
+function loop(){update();draw();requestAnimationFrame(loop);}
+document.getElementById('start').onclick=resetGame;
+window.addEventListener('keydown',e=>{let k=e.key.toLowerCase();keys[k]=true;if([' ','arrowup','arrowdown','arrowleft','arrowright'].includes(k))e.preventDefault();if(k==='p'&&running)paused=!paused;});
+window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+document.querySelectorAll('[data-key]').forEach(btn=>{const k=btn.dataset.key;const down=e=>{e.preventDefault();keys[k]=true;};const up=e=>{e.preventDefault();keys[k]=false;};btn.addEventListener('pointerdown',down);btn.addEventListener('pointerup',up);btn.addEventListener('pointerleave',up);btn.addEventListener('pointercancel',up);});
+loop();
+})();
+</script>
+</body>
+</html>
